@@ -335,12 +335,20 @@ public final class RenderedBone implements BoneEventHandler {
     }
 
     public boolean tick() {
-        return globalState.tick();
+        return tick(1);
+    }
+
+    public boolean tick(int frames) {
+        return globalState.tick(frames);
     }
 
     public boolean tick(@NotNull UUID uuid) {
+        return tick(uuid, 1);
+    }
+
+    public boolean tick(@NotNull UUID uuid, int frames) {
         var get = perPlayerState.get(uuid);
-        return get != null && get.tick();
+        return get != null && get.tick(frames);
     }
 
     public void dirtyUpdate(@NotNull PacketBundler bundler) {
@@ -359,7 +367,11 @@ public final class RenderedBone implements BoneEventHandler {
     }
 
     public void sendTransformation(@Nullable UUID uuid, @NotNull AnimationBundler bundler) {
-        state(uuid).sendTransformation(bundler);
+        sendTransformation(uuid, bundler, 0);
+    }
+
+    public void sendTransformation(@Nullable UUID uuid, @NotNull AnimationBundler bundler, int minDuration) {
+        state(uuid).sendTransformation(bundler, minDuration);
     }
 
     public void forceTransformation(@NotNull PacketBundler bundler) {
@@ -606,8 +618,8 @@ public final class RenderedBone implements BoneEventHandler {
             return def;
         }
 
-        private boolean tick() {
-            var result = state.tick(() -> {
+        private boolean tick(int frames) {
+            var result = state.tick(frames, () -> {
                 if (uuid != null) {
                     perPlayerState.remove(uuid);
                     consumer.accept(uuid);
@@ -631,14 +643,17 @@ public final class RenderedBone implements BoneEventHandler {
             return Math.round(frame + MathUtil.FLOAT_COMPARISON_EPSILON);
         }
 
-        private void sendTransformation(@NotNull AnimationBundler bundler) {
+        private void sendTransformation(@NotNull AnimationBundler bundler, int minDuration) {
             if (!updateCurrent.compareAndSet(true, false)) return;
             var after = after();
             var movement = lock.accessToWriteLock(() -> current.set(after));
             if (transformer == null) return;
+            var duration = interpolationDuration();
+            // Keep interpolating across throttled (LOD) update gaps, but never turn a snap into a lerp.
+            if (duration > 0) duration = Math.max(duration, minDuration);
             var mul = scale.getAsFloat();
             transformer.transform(
-                interpolationDuration(),
+                duration,
                 MathUtil.fma(
                     itemStack.offset().rotate(movement.rotation(), positionCache)
                         .add(movement.position())

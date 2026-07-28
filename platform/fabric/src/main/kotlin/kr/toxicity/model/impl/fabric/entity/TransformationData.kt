@@ -19,6 +19,7 @@ import org.joml.Vector3f
 
 class TransformationData {
     private var duration = 0
+    private var sentDuration = Int.MIN_VALUE
 
     private val durationDataValue
         get() = SynchedEntityData.DataValue(
@@ -69,12 +70,18 @@ class TransformationData {
     fun packDirty(entityId: Int, dest: AnimationBundler) {
         val i = translation.cleanIndex + scale.cleanIndex + rotation.cleanIndex
         if (i == 0) return
-        dest.standard += ClientboundSetEntityDataPacket(entityId, buildList(i + 2) {
+        // The client keeps the last received interpolation duration, so it is
+        // only re-sent when it actually changed.
+        val durationChanged = duration != sentDuration
+        dest.standard += ClientboundSetEntityDataPacket(entityId, buildList(if (durationChanged) i + 2 else i + 1) {
             add(INTERPOLATION_DELAY_VALUE)
             translation.value?.let { add(it) }
             rotation.value?.let { add(it) }
             scale.value?.let { add(it) }
-            add(durationDataValue)
+            if (durationChanged) {
+                add(durationDataValue)
+                sentDuration = duration
+            }
         })
     }
 

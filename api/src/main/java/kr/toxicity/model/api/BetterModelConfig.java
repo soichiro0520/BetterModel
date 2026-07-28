@@ -11,6 +11,7 @@ import kr.toxicity.model.api.config.DebugConfig;
 import kr.toxicity.model.api.config.IndicatorConfig;
 import kr.toxicity.model.api.config.ModuleConfig;
 import kr.toxicity.model.api.config.PackConfig;
+import kr.toxicity.model.api.config.PerformanceConfig;
 import kr.toxicity.model.api.mount.MountController;
 import kr.toxicity.model.api.platform.PlatformItemStack;
 import org.jetbrains.annotations.NotNull;
@@ -59,6 +60,16 @@ public interface BetterModelConfig {
      * @since 1.15.2
      */
     @NotNull PackConfig pack();
+
+    /**
+     * Returns the performance configuration (animation culling and LOD).
+     *
+     * @return the performance config
+     * @since 3.3.0
+     */
+    default @NotNull PerformanceConfig performance() {
+        return PerformanceConfig.DEFAULT;
+    }
 
     /**
      * Checks if metrics collection is enabled.

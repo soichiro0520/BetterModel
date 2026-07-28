@@ -13,6 +13,7 @@ import kr.toxicity.model.api.config.DebugConfig
 import kr.toxicity.model.api.config.IndicatorConfig
 import kr.toxicity.model.api.config.ModuleConfig
 import kr.toxicity.model.api.config.PackConfig
+import kr.toxicity.model.api.config.PerformanceConfig
 import kr.toxicity.model.api.mount.MountController
 import kr.toxicity.model.api.mount.MountControllers
 import kr.toxicity.model.api.platform.PlatformItemStack
@@ -39,6 +40,16 @@ class BetterModelConfigImpl(yaml: ConfigurationSection) : BetterModelConfig {
     private val pack = yaml.getConfigurationSection("pack")?.let {
         PackConfig.from(it::getBoolean)
     } ?: PackConfig.DEFAULT
+    private val performance = yaml.getConfigurationSection("performance")?.let {
+        PerformanceConfig(
+            it.getBoolean("animation-culling", PerformanceConfig.DEFAULT.animationCulling()),
+            it.getInt("culling-interval", PerformanceConfig.DEFAULT.cullingInterval()),
+            it.getBoolean("lod", PerformanceConfig.DEFAULT.lod()),
+            it.getDouble("lod-near-distance", PerformanceConfig.DEFAULT.lodNearDistance()),
+            it.getDouble("lod-far-distance", PerformanceConfig.DEFAULT.lodFarDistance()),
+            it.getInt("lod-max-interval", PerformanceConfig.DEFAULT.lodMaxInterval())
+        )
+    } ?: PerformanceConfig.DEFAULT
     private val metrics = yaml.getBoolean("metrics", true)
     private val sightTrace = yaml.getBoolean("sight-trace", true)
     private val mergeWithExternalResources = yaml.getBoolean("merge-with-external-resources", true)
@@ -82,6 +93,7 @@ class BetterModelConfigImpl(yaml: ConfigurationSection) : BetterModelConfig {
     override fun item(): Supplier<PlatformItemStack> = item
     override fun itemModel(): String = itemModel.name
     override fun itemNamespace(): String = itemNamespace
+    override fun performance(): PerformanceConfig = performance
     override fun metrics(): Boolean = metrics
     override fun sightTrace(): Boolean = sightTrace
     override fun mergeWithExternalResources(): Boolean = mergeWithExternalResources

@@ -14,6 +14,7 @@ import kr.toxicity.model.api.bone.BoneName;
 import kr.toxicity.model.api.bone.BoneTags;
 import kr.toxicity.model.api.bone.RenderedBone;
 import kr.toxicity.model.api.config.DebugConfig;
+import kr.toxicity.model.api.config.PerformanceConfig;
 import kr.toxicity.model.api.data.blueprint.BlueprintAnimation;
 import kr.toxicity.model.api.data.renderer.ModelRenderer;
 import kr.toxicity.model.api.data.renderer.RenderPipeline;
@@ -76,10 +77,19 @@ public abstract class Tracker implements AutoCloseable {
      * @since 1.15.2
      */
     public static final int MINECRAFT_TICK_MULTIPLIER = MathUtil.MINECRAFT_TICK_MILLS / TRACKER_TICK_INTERVAL;
+    /**
+     * The maximum amount of tracker frames a single catch-up tick can cover (one second).
+     * @since 3.3.0
+     */
+    public static final int MAX_ELAPSED_FRAMES = 1000 / TRACKER_TICK_INTERVAL;
 
     @Getter
     protected final RenderPipeline pipeline;
     private long frame = 0;
+    private long lastHandledFrame = 0;
+    private volatile int elapsedFrames = 1;
+    private volatile int updateInterval = 1;
+    private boolean culled = false;
     private final Queue<Runnable> queuedTask = new ConcurrentLinkedQueue<>();
     private final AtomicBoolean tickPause = new AtomicBoolean();
     private final AtomicBoolean isClosed = new AtomicBoolean();
@@ -120,8 +130,8 @@ public abstract class Tracker implements AutoCloseable {
 
     private ScheduledPacketHandler handler = (t, s) -> {
         if (!tickPause.get()) {
-            scriptProcessor.tick();
-            t.pipeline.tick(s.getViewBundler());
+            scriptProcessor.tick(t.elapsedFrames, () -> {});
+            t.pipeline.tick(s.getViewBundler(), t.elapsedFrames, t.minInterpolationDuration());
         }
     };
     private BiConsumer<Tracker, PlatformPlayer> perPlayerHandler = null;
@@ -143,8 +153,32 @@ public abstract class Tracker implements AutoCloseable {
                     Runnable task;
                     while ((task = queuedTask.poll()) != null) task.run();
                 }
+                var interval = updateInterval;
+                // LOD/culling throttle: skip this frame entirely unless a force update breaks through.
+                if (interval > 1 && frame % interval != 0 && !readyForForceUpdate.get()) return;
+                var elapsed = (int) Math.clamp(frame - lastHandledFrame, 1, MAX_ELAPSED_FRAMES);
+                lastHandledFrame = frame;
+                var performance = BetterModel.config().performance();
+                var viewed = pipeline.viewedPlayerList();
+                updateInterval = nextUpdateInterval(performance, viewed);
+                if (performance.animationCulling() && viewed.isEmpty() && playerCount() > 0 && !readyForForceUpdate.get()) {
+                    // Nobody passes the view filter: advance gameplay clocks only,
+                    // skipping transform math and packet building altogether.
+                    if (!tickPause.get()) {
+                        scriptProcessor.tick(elapsed, () -> {});
+                        pipeline.tickIdle(elapsed);
+                    }
+                    onCulledTick();
+                    culled = true;
+                    return;
+                }
+                elapsedFrames = elapsed;
+                if (culled) {
+                    culled = false;
+                    pipeline.flushTransformation(bundlerSet.viewBundler, minInterpolationDuration());
+                }
                 handler.handle(this, bundlerSet);
-                bundlerSet.send();
+                bundlerSet.send(viewed);
             } catch (Throwable throwable) {
                 LogUtil.handleException("Ticking this tracker has been failed: " + name(), throwable);
             }
@@ -213,8 +247,64 @@ public abstract class Tracker implements AutoCloseable {
             task.cancel(true);
             task = null;
             frame = 0;
+            lastHandledFrame = 0;
+            elapsedFrames = 1;
+            updateInterval = 1;
+            culled = false;
             LogUtil.debug(DebugConfig.DebugOption.TRACKER, () -> getClass().getSimpleName() + " scheduler shutdown: " + name());
         }
+    }
+
+    /**
+     * Computes the next update interval in tracker frames from culling and LOD config.
+     *
+     * @param performance the performance config
+     * @param viewed players currently passing the view filter
+     * @return the interval in tracker frames (1 = full rate)
+     */
+    private int nextUpdateInterval(@NotNull PerformanceConfig performance, @NotNull List<PlayerChannelHandler> viewed) {
+        if (viewed.isEmpty()) return performance.animationCulling() ? performance.cullingInterval() : 1;
+        if (!performance.lod()) return 1;
+        var loc = location();
+        var min = Double.MAX_VALUE;
+        for (var channel : viewed) {
+            var playerLoc = channel.player().location();
+            if (!playerLoc.world().equals(loc.world())) continue;
+            var d = playerLoc.distanceSquared(loc);
+            if (d < min) min = d;
+        }
+        return min == Double.MAX_VALUE ? 1 : performance.lodInterval(min);
+    }
+
+    /**
+     * Returns the minimum client-side interpolation duration in Minecraft ticks
+     * so animation stays smooth across throttled (LOD) update gaps.
+     *
+     * @return the minimum duration in Minecraft ticks
+     * @since 3.3.0
+     */
+    public int minInterpolationDuration() {
+        var interval = updateInterval;
+        return interval <= 1 ? 0 : Math.ceilDiv(interval, MINECRAFT_TICK_MULTIPLIER);
+    }
+
+    /**
+     * Returns the amount of tracker frames covered by the current update.
+     *
+     * @return the elapsed frames (1 at full rate, more under LOD throttling)
+     * @since 3.3.0
+     */
+    public int elapsedFrames() {
+        return elapsedFrames;
+    }
+
+    /**
+     * Called on culled heartbeat frames (no player passes the view filter) so
+     * subclasses can keep cheap gameplay state such as the tracked location fresh.
+     *
+     * @since 3.3.0
+     */
+    protected void onCulledTick() {
     }
 
     /**
@@ -976,8 +1066,8 @@ public abstract class Tracker implements AutoCloseable {
         private BundlerSet() {
         }
 
-        private void send() {
-            globalSend();
+        private void send(@NotNull List<PlayerChannelHandler> viewed) {
+            globalSend(viewed);
             perPlayerSend();
         }
 
@@ -986,7 +1076,7 @@ public abstract class Tracker implements AutoCloseable {
             perPlayerViewBundler.values().forEach(PerPlayerCache::send);
         }
 
-        private void globalSend() {
+        private void globalSend(@NotNull List<PlayerChannelHandler> viewed) {
             if (tickBundler.isNotEmpty()) {
                 pipeline.allPlayer().map(PlayerChannelHandler::player).forEach(tickBundler::send);
                 tickBundler = pipeline.createBundler();
@@ -996,7 +1086,9 @@ public abstract class Tracker implements AutoCloseable {
                 dataBundler = pipeline.createBundler();
             }
             if (viewBundler.isNotEmpty()) {
-                pipeline.viewedPlayer().filter(p -> !perPlayerViewBundler.containsKey(p.uuid())).forEach(viewBundler::send);
+                for (var channel : viewed) {
+                    if (!perPlayerViewBundler.containsKey(channel.uuid())) viewBundler.send(channel);
+                }
                 viewBundler = pipeline.createAnimationBundler();
             }
         }
@@ -1031,7 +1123,7 @@ public abstract class Tracker implements AutoCloseable {
         }
 
         private void send() {
-            if (pipeline.tick(uuid, bundler) && bundler.isNotEmpty()) {
+            if (pipeline.tick(uuid, bundler, elapsedFrames, minInterpolationDuration()) && bundler.isNotEmpty()) {
                 channel().ifPresent(handler -> bundler.send(handler));
                 bundler = pipeline.createAnimationBundler();
             }

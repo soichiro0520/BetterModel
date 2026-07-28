@@ -33,6 +33,24 @@ pack:
   # Obfuscates model and texture names in the resource pack to prevent easy extraction.
   use-obfuscation: true
 
+# Performance settings: animation culling and distance-based LOD.
+performance:
+  # Skips bone transform computation and packet building for a model while no player
+  # passes its sight trace. Animation clocks keep running so gameplay timing is preserved.
+  animation-culling: true
+  # Heartbeat interval in tracker frames (25ms each) used to advance animation clocks while culled.
+  culling-interval: 10
+  # Reduces the update rate of models whose nearest viewer is far away.
+  # The client smooths the lower update rate via display interpolation.
+  lod: true
+  # Distance in blocks below which models always update at the full rate (40 updates/sec).
+  lod-near-distance: 16
+  # Distance in blocks at which models update at the slowest LOD rate.
+  lod-far-distance: 48
+  # Slowest LOD update interval in tracker frames (25ms each). Must be a power of two (max 16).
+  # 8 = one update per 200ms.
+  lod-max-interval: 8
+
 # Toggles metrics collection via bStats (https://bstats.org/plugin/bukkit/BetterModel/24237).
 # Disabling this helps us less to improve the plugin.
 metrics: true

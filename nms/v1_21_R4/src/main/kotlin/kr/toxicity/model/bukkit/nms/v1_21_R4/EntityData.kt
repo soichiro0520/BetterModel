@@ -60,6 +60,7 @@ internal val DISPLAY_ROTATION = DISPLAY_SET[5] as EntityDataAccessor<Quaternionf
 internal class TransformationData {
 
     private var _duration = 0
+    private var _sentDuration = Int.MIN_VALUE
     private val duration get() = SynchedEntityData.DataValue(DISPLAY_INTERPOLATION_DURATION.id, DISPLAY_INTERPOLATION_DURATION.serializer, _duration)
     private val translation = Item(Vector3f(), DISPLAY_TRANSLATION, MathUtil::isSimilar, Vector3f::set)
     private val scale = Item(Vector3f(), DISPLAY_SCALE, MathUtil::isSimilar, Vector3f::set)
@@ -68,13 +69,20 @@ internal class TransformationData {
     fun packDirty(entityId: Int, dest: AnimationBundler) {
         val i = translation.cleanIndex + scale.cleanIndex + rotation.cleanIndex
         if (i == 0) return
+        // The client keeps the last received interpolation duration, so the
+        // vanilla data value is only re-sent when it actually changed.
+        val durationChanged = _duration != _sentDuration
         (dest.mod as ModAnimationBundlerImpl).append(entityId) {
-            dest.standard += ClientboundSetEntityDataPacket(entityId, buildList(i + 2) {
+            dest.standard += ClientboundSetEntityDataPacket(entityId, buildList(if (durationChanged) i + 2 else i + 1) {
                 add(DISPLAY_INTERPOLATION_DELAY)
                 translation.value?.let { appendPosition(it.value); add(it) }
                 rotation.value?.let { appendRotation(it.value); add(it) }
                 scale.value?.let { appendScale(it.value); add(it) }
-                appendDuration(_duration); add(duration)
+                appendDuration(_duration)
+                if (durationChanged) {
+                    add(duration)
+                    _sentDuration = _duration
+                }
             })
         }
     }

@@ -184,6 +184,13 @@ public class EntityTracker extends Tracker {
         pipeline.forEach(bone -> bone.applyAtDisplay(BonePredicate.TRUE, display -> display.syncPosition(loc)));
     }
 
+    @Override
+    protected void onCulledTick() {
+        // Keep the tracked location fresh while culled so the sight trace
+        // tests against where the entity actually is.
+        updateLocation();
+    }
+
     /**
      * Returns the entity tracker registry associated with this tracker.
      *

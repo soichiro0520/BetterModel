@@ -94,11 +94,16 @@ public final class AnimationStateHandler<T extends Timed> {
     }
 
     /**
+     * The maximum amount of keyframe shifts a single catch-up tick can process.
+     */
+    private static final int MAX_CATCH_UP_SHIFT = 8;
+
+    /**
      * Ticks this state handler
      * @return keyframe has been shifted or not
      */
     public boolean tick() {
-        return tick(() -> {});
+        return tick(1, () -> {});
     }
 
     /**
@@ -107,12 +112,34 @@ public final class AnimationStateHandler<T extends Timed> {
      * @return keyframe has been shifted or not
      */
     public boolean tick(@NotNull Runnable ifEmpty) {
-        delay--;
+        return tick(1, ifEmpty);
+    }
+
+    /**
+     * Ticks this state handler, advancing the animation clock by the given amount of frames.
+     * <p>
+     * Passing more than one frame catches the clock up after throttled (LOD/culled) frames:
+     * every keyframe that expired in the elapsed window is shifted through so wall-clock
+     * animation speed is preserved, while intermediate keyframes coalesce into one update.
+     * </p>
+     * @param frames elapsed tracker frames since the last tick
+     * @param ifEmpty callback if animator is empty
+     * @return keyframe has been shifted or not
+     */
+    public boolean tick(int frames, @NotNull Runnable ifEmpty) {
+        delay -= frames;
         if (animators.isEmpty()) {
             ifEmpty.run();
             return false;
         }
-        return shouldUpdateAnimation() && updateAnimation();
+        if (!shouldUpdateAnimation(frames)) return false;
+        var shifted = false;
+        var shift = 0;
+        do {
+            if (!updateAnimation()) break;
+            shifted = true;
+        } while (afterKeyframe != null && keyframeFinished() && ++shift < MAX_CATCH_UP_SHIFT);
+        return shifted;
     }
 
     /**
@@ -124,8 +151,8 @@ public final class AnimationStateHandler<T extends Timed> {
         return frame == 0 ? 0 : Math.clamp((float) delay / frame, 0F, 1F);
     }
 
-    private boolean shouldUpdateAnimation() {
-        return (afterKeyframe != null && keyframeFinished()) || delay % Tracker.MINECRAFT_TICK_MULTIPLIER == 0;
+    private boolean shouldUpdateAnimation(int frames) {
+        return (afterKeyframe != null && keyframeFinished()) || frames > 1 || delay % Tracker.MINECRAFT_TICK_MULTIPLIER == 0;
     }
 
     private boolean updateAnimation() {
@@ -173,7 +200,9 @@ public final class AnimationStateHandler<T extends Timed> {
             beforeKeyframe = afterKeyframe,
             afterKeyframe = next
         );
-        delay = Math.round(frame());
+        // Carry the (bounded) overshoot of the previous keyframe so throttled
+        // catch-up ticking does not slow wall-clock animation speed.
+        delay = Math.round(frame()) + Math.max(Math.min(delay, 0), -MAX_CATCH_UP_SHIFT * 2);
         return true;
     }
 
@@ -186,6 +215,7 @@ public final class AnimationStateHandler<T extends Timed> {
      */
     public void addAnimation(@NotNull String name, @NotNull AnimationIterator<T> iterator, @NotNull AnimationModifier modifier, @NotNull Runnable removeTask) {
         synchronized (animators) {
+            if (animators.isEmpty() && delay < 0) delay = 0;
             animators.put(name, new TreeIterator(name, iterator, modifier, removeTask), modifier.priority());
         }
     }

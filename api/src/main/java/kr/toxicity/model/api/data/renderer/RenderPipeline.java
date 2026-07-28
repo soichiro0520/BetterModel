@@ -275,12 +275,53 @@ public final class RenderPipeline implements BoneEventHandler, Iterable<Rendered
      * @since 1.15.2
      */
     public boolean tick(@NotNull AnimationBundler bundler) {
-        var match = matchTree(RenderedBone::tick);
+        return tick(bundler, 1, 0);
+    }
+
+    /**
+     * Ticks the model, updating animations and IK.
+     *
+     * @param bundler the packet bundler to use
+     * @param frames elapsed tracker frames since the last handled tick (&gt; 1 under LOD throttling)
+     * @param minDuration minimum interpolation duration in Minecraft ticks for emitted transforms
+     * @return true if any updates occurred
+     * @since 3.3.0
+     */
+    public boolean tick(@NotNull AnimationBundler bundler, int frames, int minDuration) {
+        var match = matchTree(b -> b.tick(frames));
         if (match) {
             ikSolver.solve();
-            forEach(b -> b.sendTransformation(null, bundler));
+            forEach(b -> b.sendTransformation(null, bundler, minDuration));
         }
         return match;
+    }
+
+    /**
+     * Advances animation clocks without computing transforms or building packets.
+     * <p>
+     * Used while a tracker is culled (no player passes its view filter): gameplay
+     * timing is preserved but the whole transform/packet stage is skipped.
+     * Pending updates are flushed by {@link #flushTransformation(AnimationBundler, int)}
+     * when the model becomes visible again.
+     * </p>
+     *
+     * @param frames elapsed tracker frames since the last handled tick
+     * @since 3.3.0
+     */
+    public void tickIdle(int frames) {
+        matchTree(b -> b.tick(frames));
+    }
+
+    /**
+     * Emits pending transformations of all bones without advancing animation clocks.
+     *
+     * @param bundler the packet bundler to use
+     * @param minDuration minimum interpolation duration in Minecraft ticks
+     * @since 3.3.0
+     */
+    public void flushTransformation(@NotNull AnimationBundler bundler, int minDuration) {
+        ikSolver.solve();
+        forEach(b -> b.sendTransformation(null, bundler, minDuration));
     }
 
     /**
@@ -292,10 +333,24 @@ public final class RenderPipeline implements BoneEventHandler, Iterable<Rendered
      * @since 1.15.2
      */
     public boolean tick(@NotNull UUID uuid, @NotNull AnimationBundler bundler) {
-        var match = matchTree(b -> b.tick(uuid));
+        return tick(uuid, bundler, 1, 0);
+    }
+
+    /**
+     * Ticks the model for a specific player (e.g., for per-player animations).
+     *
+     * @param uuid the UUID of the player
+     * @param bundler the packet bundler to use
+     * @param frames elapsed tracker frames since the last handled tick
+     * @param minDuration minimum interpolation duration in Minecraft ticks
+     * @return true if any updates occurred
+     * @since 3.3.0
+     */
+    public boolean tick(@NotNull UUID uuid, @NotNull AnimationBundler bundler, int frames, int minDuration) {
+        var match = matchTree(b -> b.tick(uuid, frames));
         if (match) {
             ikSolver.solve(uuid);
-            forEach(b -> b.sendTransformation(uuid, bundler));
+            forEach(b -> b.sendTransformation(uuid, bundler, minDuration));
         }
         return match;
     }
@@ -548,6 +603,26 @@ public final class RenderPipeline implements BoneEventHandler, Iterable<Rendered
      */
     public @NotNull Stream<PlayerChannelHandler> viewedPlayer() {
         return allPlayer().filter(channel -> viewFilter.test(channel.player()));
+    }
+
+    /**
+     * Evaluates the view filter once for every spawned player and returns the survivors.
+     * <p>
+     * Used by the tracker to run the (potentially costly) sight test a single time per
+     * frame, sharing the result between the culling decision and the packet fan-out.
+     * </p>
+     *
+     * @return the list of viewed players
+     * @since 3.3.0
+     */
+    public @NotNull List<PlayerChannelHandler> viewedPlayerList() {
+        if (playerMap.isEmpty()) return List.of();
+        var list = new ArrayList<PlayerChannelHandler>(playerMap.size());
+        for (var spawned : playerMap.values()) {
+            var handler = spawned.handler;
+            if (viewFilter.test(handler.player())) list.add(handler);
+        }
+        return list;
     }
 
     /**
