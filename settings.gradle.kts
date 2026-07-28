@@ -66,7 +66,10 @@ include(
     "nms:v26_R2",
 
     //test
-    "test-plugin"
+    "test-plugin",
+
+    //benchmark
+    "benchmark-plugin"
 )
 
 published.forEach { target ->
