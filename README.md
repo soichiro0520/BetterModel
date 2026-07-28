@@ -20,6 +20,16 @@
 * * *
 <sub>(In BlockBench / In Minecraft)</sub>
 
+# 🔱 About this fork
+
+This is a **performance-focused fork** of [toxicity188/BetterModel](https://github.com/toxicity188/BetterModel)
+targeting 30–50 high-polygon models animating simultaneously at TPS 20.
+It adds computation culling, distance-based LOD, transform-packet diffing, and a benchmark harness.
+
+- Investigation report & design: [`docs/performance/INVESTIGATION.md`](docs/performance/INVESTIGATION.md)
+- Fork/cherry-pick workflow: [`docs/performance/FORK.md`](docs/performance/FORK.md)
+- Benchmark environment: [`benchmark/README.md`](benchmark/README.md)
+
 # ✨ Introduction
 
 **BetterModel** is a server-based engine that provides runtime [BlockBench](https://www.blockbench.net/) model rendering & animating for Minecraft Java Edition.
