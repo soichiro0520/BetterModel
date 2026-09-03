@@ -8,6 +8,7 @@
 package kr.toxicity.model.api.data.renderer;
 
 import kr.toxicity.model.api.BetterModel;
+import kr.toxicity.model.api.BetterModelConfig;
 import kr.toxicity.model.api.animation.AnimationOverrideState;
 import kr.toxicity.model.api.animation.RunningAnimation;
 import kr.toxicity.model.api.bone.*;
@@ -32,6 +33,7 @@ import org.joml.Vector3f;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.BiPredicate;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -64,6 +66,14 @@ public final class RenderPipeline implements BoneEventHandler, Iterable<Rendered
     private final int displayAmount;
     private final Map<UUID, SpawnedPlayer> playerMap = new ConcurrentHashMap<>();
     private final Set<UUID> hidePlayerSet = ConcurrentHashMap.newKeySet();
+
+    /**
+     * Bones of equipment models dynamically attached after this pipeline was created.
+     * Iterated after the base model bones by {@link #forEach(Consumer)}, {@link #stream()}
+     * and {@link #matchTree(Predicate)} so attached equipment is ticked, spawned and removed together
+     * with the base model.
+     */
+    private final List<RenderedBone> dynamicBones = new CopyOnWriteArrayList<>();
 
     private final BoneEventDispatcher eventDispatcher = new BoneEventDispatcher();
     private final BoneIKSolver ikSolver;
@@ -301,6 +311,87 @@ public final class RenderPipeline implements BoneEventHandler, Iterable<Rendered
     }
 
     /**
+     * Attaches an equipment model under the anchor bone of the base model.
+     * <p>
+     * The anchor bone is looked up by its raw name, which must start with
+     * {@link RenderedBone#ANCHOR_PREFIX}. The equipment's root bones are created as children of the
+     * anchor bone, so the anchor's keyframe animation and physics transforms propagate to the
+     * equipment automatically. The root bones are scaled by {@code 1 + }{@link BetterModelConfig#equipmentOffset()}
+     * to reduce z-fighting with the base model.
+     * </p>
+     * <p>
+     * If players are already viewing this model, spawn packets for the new displays are sent immediately.
+     * </p>
+     *
+     * @param anchorName the raw name of the anchor bone
+     * @param equipment the equipment model renderer
+     * @return the attached root bones, or an empty array if the anchor bone was not found
+     * @throws NullPointerException if anchorName or equipment is null
+     * @since 3.4.2
+     */
+    public synchronized @NotNull RenderedBone @NotNull [] attach(@NotNull String anchorName, @NotNull ModelRenderer equipment) {
+        Objects.requireNonNull(anchorName);
+        Objects.requireNonNull(equipment);
+        var anchor = boneOf(BoneName.of(anchorName));
+        if (anchor == null) return new RenderedBone[0];
+        var context = source.fallbackContext();
+        var offsetScale = 1F + (float) BetterModel.config().equipmentOffset();
+        var roots = equipment.rendererGroups().values().stream()
+            .map(group -> group.create(context, anchor))
+            .toArray(RenderedBone[]::new);
+        for (var root : roots) {
+            root.scale(() -> offsetScale);
+            root.flatten().forEach(bone -> {
+                bone.extend(this);
+                dynamicBones.add(bone);
+            });
+            anchor.attach(root);
+        }
+        if (!playerMap.isEmpty()) {
+            playerMap.forEach((_, spawned) -> {
+                var bundler = createBundler();
+                var hided = isHide(spawned.handler.player());
+                for (var root : roots) {
+                    root.spawn(hided, bundler);
+                    root.flatten().forEach(bone -> bone.forceUpdate(bundler));
+                }
+                if (bundler.isNotEmpty()) bundler.send(spawned.handler.player());
+            });
+        }
+        return roots;
+    }
+
+    /**
+     * Detaches all equipment models attached under the anchor bone.
+     * <p>
+     * Despawn packets are sent to every player currently viewing this model.
+     * </p>
+     *
+     * @param anchorName the raw name of the anchor bone
+     * @return true if any equipment was detached
+     * @since 3.4.2
+     */
+    public synchronized boolean detach(@NotNull String anchorName) {
+        var anchor = boneOf(BoneName.of(anchorName));
+        if (anchor == null) return false;
+        var children = List.copyOf(anchor.attachedChildren());
+        if (children.isEmpty()) return false;
+        for (var root : children) {
+            var subtree = root.flatten();
+            if (!playerMap.isEmpty()) {
+                playerMap.forEach((_, spawned) -> {
+                    var bundler = createBundler();
+                    subtree.forEach(bone -> bone.remove(bundler));
+                    if (bundler.isNotEmpty()) bundler.send(spawned.handler.player());
+                });
+            }
+            subtree.forEach(dynamicBones::remove);
+            anchor.detach(root);
+        }
+        return true;
+    }
+
+    /**
      * Sets the default position modifier for all bones.
      *
      * @param movement the movement function
@@ -359,7 +450,11 @@ public final class RenderPipeline implements BoneEventHandler, Iterable<Rendered
     }
 
     /**
-     * Returns a collection of all bones in this pipeline.
+     * Returns a collection of all bones of the base model in this pipeline.
+     * <p>
+     * Bones of attached equipment models are not included; they are accessible via
+     * {@link RenderedBone#attachedChildren()} of their anchor bone.
+     * </p>
      *
      * @return the collection of bones
      * @since 1.15.2
@@ -484,6 +579,9 @@ public final class RenderPipeline implements BoneEventHandler, Iterable<Rendered
         for (RenderedBone value : flattenBones) {
             if (predicate.test(value)) result = true;
         }
+        for (RenderedBone value : dynamicBones) {
+            if (predicate.test(value)) result = true;
+        }
         return result;
     }
 
@@ -498,6 +596,10 @@ public final class RenderPipeline implements BoneEventHandler, Iterable<Rendered
     public <T> @Nullable T firstNotNull(@NotNull Function<RenderedBone, T> mapper) {
         Objects.requireNonNull(mapper);
         for (RenderedBone value : flattenBones) {
+            var t = mapper.apply(value);
+            if (t != null) return t;
+        }
+        for (RenderedBone value : dynamicBones) {
             var t = mapper.apply(value);
             if (t != null) return t;
         }
@@ -604,6 +706,9 @@ public final class RenderPipeline implements BoneEventHandler, Iterable<Rendered
         for (RenderedBone bone : flattenBones) {
             action.accept(bone);
         }
+        for (RenderedBone bone : dynamicBones) {
+            action.accept(bone);
+        }
     }
 
     @Override
@@ -615,7 +720,7 @@ public final class RenderPipeline implements BoneEventHandler, Iterable<Rendered
     @Override
     @NotNull
     public Spliterator<RenderedBone> spliterator() {
-        return Arrays.spliterator(flattenBones);
+        return stream().spliterator();
     }
 
     /**
@@ -625,7 +730,7 @@ public final class RenderPipeline implements BoneEventHandler, Iterable<Rendered
      * @since 2.2.0
      */
     public @NotNull Stream<RenderedBone> stream() {
-        return Arrays.stream(flattenBones);
+        return Stream.concat(Arrays.stream(flattenBones), dynamicBones.stream());
     }
 
     /**

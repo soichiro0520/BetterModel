@@ -79,6 +79,7 @@ class BetterModelConfigImpl(yaml: ConfigurationNode) : BetterModelConfig {
     private val cancelPlayerModelInventory = yaml.node("cancel-player-model-inventory").getBoolean(false)
     private val playerHideDelay = yaml.node("player-hide-delay").getLong(3L).coerceAtLeast(1L)
     private val packetBundlingSize = yaml.node("packet-bundling-size").getInt(16)
+    private val equipmentOffset = yaml.node("equipment-offset").getDouble(0.0)
     private val enableStrictLoading = yaml.node("enable-strict-loading").getBoolean(false)
 
     override fun debug(): DebugConfig = debug
@@ -102,6 +103,7 @@ class BetterModelConfigImpl(yaml: ConfigurationNode) : BetterModelConfig {
     override fun cancelPlayerModelInventory(): Boolean = cancelPlayerModelInventory
     override fun playerHideDelay(): Long = playerHideDelay
     override fun packetBundlingSize(): Int = packetBundlingSize
+    override fun equipmentOffset(): Double = equipmentOffset
     override fun enableStrictLoading(): Boolean = enableStrictLoading
 }
 

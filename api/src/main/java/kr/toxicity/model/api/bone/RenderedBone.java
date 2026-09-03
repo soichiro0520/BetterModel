@@ -42,6 +42,7 @@ import org.joml.Vector3f;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.*;
 import java.util.stream.Collectors;
@@ -55,6 +56,17 @@ public final class RenderedBone implements BoneEventHandler {
     private static final int INITIAL_TINT_VALUE = 0xFFFFFF;
     private static final Vector3f EMPTY_VECTOR = new Vector3f();
     private static final BonePosition EMPTY_POSITION = new BonePosition(EMPTY_VECTOR, EMPTY_VECTOR, null);
+
+    /**
+     * The prefix of anchor bone names.
+     * <p>
+     * Anchor bones never render their own display: they exist only as attachment points
+     * for dynamically equipped model subtrees (see {@link kr.toxicity.model.api.data.renderer.RenderPipeline#attach}).
+     * </p>
+     *
+     * @since 3.4.2
+     */
+    public static final String ANCHOR_PREFIX = "anchor_";
 
     @Getter
     @NotNull
@@ -70,6 +82,11 @@ public final class RenderedBone implements BoneEventHandler {
     @Getter
     final RenderedBone parent;
     final RenderedBone[] children;
+
+    /**
+     * The root bones of equipment models attached under this bone.
+     */
+    private final List<RenderedBone> attachedChildren = new CopyOnWriteArrayList<>();
 
     private volatile SequencedSet<RenderedBone> flattenBones;
 
@@ -131,7 +148,7 @@ public final class RenderedBone implements BoneEventHandler {
         itemMapper = group.getItemMapper();
         root = parent != null ? parent.root : this;
         this.itemStack = itemMapper.apply(renderContext, group.getItemStack());
-        this.dummyBone = group.getItemStack().isAir() && itemMapper == BoneItemMapper.EMPTY;
+        this.dummyBone = (group.getItemStack().isAir() && itemMapper == BoneItemMapper.EMPTY) || group.name().rawName().startsWith(ANCHOR_PREFIX);
         defaultFrame = movement;
         children = childrenMapper.apply(this);
         if (!dummyBone) {
@@ -497,9 +514,12 @@ public final class RenderedBone implements BoneEventHandler {
         if ((set = flattenBones) != null) return set;
         synchronized (this) {
             if ((set = flattenBones) != null) return set;
-            return flattenBones = children.length == 0 ? SingletonSequencedSet.of(this) : Stream.concat(
+            return flattenBones = (children.length == 0 && attachedChildren.isEmpty()) ? SingletonSequencedSet.of(this) : Stream.concat(
                 Stream.of(this),
-                Arrays.stream(children).flatMap(RenderedBone::flatten)
+                Stream.concat(
+                    Arrays.stream(children).flatMap(RenderedBone::flatten),
+                    attachedChildren.stream().flatMap(RenderedBone::flatten)
+                )
             ).collect(Collectors.collectingAndThen(
                 Collectors.toCollection(ObjectLinkedOpenHashSet::new),
                 ObjectSortedSets::unmodifiable
@@ -507,10 +527,58 @@ public final class RenderedBone implements BoneEventHandler {
         }
     }
 
+    /**
+     * Attaches an equipment root bone under this bone.
+     * <p>
+     * The child must have been created with this bone as its parent
+     * (see {@link RendererGroup#create(BoneRenderContext, RenderedBone)}).
+     * </p>
+     *
+     * @param child the equipment root bone
+     * @return true if attached, false if the child's parent is not this bone or it is already attached
+     * @since 3.4.2
+     */
+    @ApiStatus.Internal
+    public boolean attach(@NotNull RenderedBone child) {
+        if (child.parent != this || attachedChildren.contains(child)) return false;
+        var result = attachedChildren.add(child);
+        if (result) flattenBones = null;
+        return result;
+    }
+
+    /**
+     * Detaches an equipment root bone from this bone.
+     *
+     * @param child the equipment root bone
+     * @return true if detached
+     * @since 3.4.2
+     */
+    @ApiStatus.Internal
+    public boolean detach(@NotNull RenderedBone child) {
+        var result = attachedChildren.remove(child);
+        if (result) flattenBones = null;
+        return result;
+    }
+
+    /**
+     * Gets the root bones of equipment models attached under this bone.
+     *
+     * @return the attached equipment root bones
+     * @since 3.4.2
+     */
+    @Unmodifiable
+    @NotNull
+    public List<RenderedBone> attachedChildren() {
+        return Collections.unmodifiableList(attachedChildren);
+    }
+
     public boolean matchTree(@NotNull BonePredicate predicate, @NotNull BiPredicate<RenderedBone, BonePredicate> mapper) {
         var parentResult = mapper.test(this, predicate);
         var childPredicate = predicate.children(parentResult);
         for (RenderedBone value : children) {
+            if (value.matchTree(childPredicate, mapper)) parentResult = true;
+        }
+        for (RenderedBone value : attachedChildren) {
             if (value.matchTree(childPredicate, mapper)) parentResult = true;
         }
         return parentResult;
@@ -520,6 +588,9 @@ public final class RenderedBone implements BoneEventHandler {
         var parentResult = mapper.test(this, overrideState);
         if (parentResult) overrideState = AnimationOverrideState.MATCHED;
         for (RenderedBone value : children) {
+            if (value.matchAnimation(overrideState, mapper)) parentResult = true;
+        }
+        for (RenderedBone value : attachedChildren) {
             if (value.matchAnimation(overrideState, mapper)) parentResult = true;
         }
         return parentResult;

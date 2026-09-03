@@ -121,7 +121,23 @@ public final class RendererGroup {
         return create(context, null);
     }
 
-    private @NotNull RenderedBone create(@NotNull BoneRenderContext context, @Nullable RenderedBone parentBone) {
+    /**
+     * Creates entity with a parent bone.
+     * <p>
+     * Used to attach this group as an equipment subtree under an anchor bone of another model.
+     * The created bone follows the parent's animation and physics transforms automatically.
+     * </p>
+     *
+     * @param context context
+     * @param parentBone parent bone
+     * @return entity
+     * @since 3.4.2
+     */
+    public @NotNull RenderedBone create(@NotNull BoneRenderContext context, @NotNull RenderedBone parentBone) {
+        return create0(context, parentBone);
+    }
+
+    private @NotNull RenderedBone create0(@NotNull BoneRenderContext context, @Nullable RenderedBone parentBone) {
         return new RenderedBone(
             this,
             parentBone,

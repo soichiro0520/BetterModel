@@ -206,6 +206,18 @@ public interface BetterModelConfig {
     int packetBundlingSize();
 
     /**
+     * Returns the scale offset applied to the root of attached equipment models.
+     * <p>
+     * A small positive value (e.g. {@code 0.01}) slightly inflates the equipment to prevent
+     * z-fighting with the base model. {@code 0} disables the offset.
+     * </p>
+     *
+     * @return the equipment scale offset
+     * @since 3.4.2
+     */
+    double equipmentOffset();
+
+    /**
      * Checks if strict loading mode is enabled.
      * <p>
      * Strict loading causes the platform to fail fast on model loading errors.

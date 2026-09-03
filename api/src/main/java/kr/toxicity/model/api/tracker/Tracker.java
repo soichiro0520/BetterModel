@@ -345,6 +345,43 @@ public abstract class Tracker implements AutoCloseable {
     }
 
     /**
+     * Equips an equipment model under the anchor bone of this tracker's model.
+     * <p>
+     * The anchor bone must be a bone whose raw name starts with {@link RenderedBone#ANCHOR_PREFIX}.
+     * The equipment subtree automatically follows the anchor bone's animation and physics transforms.
+     * Attaching to an anchor that already has equipment adds the new equipment alongside it;
+     * use {@link #unequip(String)} first to replace it.
+     * </p>
+     *
+     * <p>Example usage:</p>
+     * <pre>{@code
+     * var tracker = EntityTrackerRegistry.instance().getOrCreate(entity, "my_model");
+     * var equipment = BetterModel.platform().manager(ModelManager.class).model("sword_equipment");
+     * if (equipment != null) tracker.equip("anchor_right_hand", equipment);
+     * }</pre>
+     *
+     * @param anchorName the raw name of the anchor bone
+     * @param equipment the equipment model renderer
+     * @return the attached root bones, or an empty array if the anchor bone was not found
+     * @throws NullPointerException if anchorName or equipment is null
+     * @since 3.4.2
+     */
+    public @NotNull RenderedBone @NotNull [] equip(@NotNull String anchorName, @NotNull ModelRenderer equipment) {
+        return pipeline.attach(anchorName, equipment);
+    }
+
+    /**
+     * Unequips all equipment models attached under the anchor bone.
+     *
+     * @param anchorName the raw name of the anchor bone
+     * @return true if any equipment was detached
+     * @since 3.4.2
+     */
+    public boolean unequip(@NotNull String anchorName) {
+        return pipeline.detach(anchorName);
+    }
+
+    /**
      * Calculates the height of the model based on its head bone position.
      *
      * @return the height

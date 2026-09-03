@@ -92,6 +92,10 @@ player-hide-delay: 3
 # Higher values can reduce network overhead but may increase perceived latency. 0 to disable.
 packet-bundling-size: 16
 
+# A small scale offset applied to attached equipment models to prevent z-fighting with the base model.
+# For example, 0.01 slightly inflates the equipment. 0 disables the offset.
+equipment-offset: 0.0
+
 # Enables strict loading mode. If true, the plugin will fail to load models with unsupported features.
 # If false, it will attempt to load them by ignoring unsupported parts, which may cause visual issues.
 enable-strict-loading: false
