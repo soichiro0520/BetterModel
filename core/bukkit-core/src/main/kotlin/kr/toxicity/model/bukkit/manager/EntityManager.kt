@@ -11,6 +11,7 @@ import com.destroystokyo.paper.event.entity.EntityAddToWorldEvent
 import com.destroystokyo.paper.event.entity.EntityJumpEvent
 import com.destroystokyo.paper.event.entity.EntityRemoveFromWorldEvent
 import com.destroystokyo.paper.event.player.PlayerJumpEvent
+import io.papermc.paper.event.entity.EntityCollideWithEntityEvent
 import it.unimi.dsi.fastutil.objects.ReferenceSet
 import kr.toxicity.model.api.BetterModel
 import kr.toxicity.model.api.bukkit.BetterModelBukkit
@@ -25,6 +26,7 @@ import kr.toxicity.model.bukkit.util.wrap
 import kr.toxicity.model.manager.GlobalManager
 import kr.toxicity.model.manager.ReloadPipeline
 import kr.toxicity.model.util.PLATFORM
+import org.bukkit.entity.AbstractCubeMob
 import org.bukkit.entity.Entity
 import org.bukkit.entity.Player
 import org.bukkit.event.EventHandler
@@ -37,8 +39,11 @@ import org.bukkit.event.player.PlayerQuitEvent
 import org.bukkit.event.world.EntitiesUnloadEvent
 import org.bukkit.inventory.EquipmentSlot
 import org.bukkit.potion.PotionEffectType
+import org.joml.Vector3f
 
 object EntityManager : GlobalManager {
+
+    private const val CUBE_IMPULSE_COEFFICIENT = 0.2F
 
     private val effectSet = ReferenceSet.of(
         PotionEffectType.GLOWING,
@@ -61,6 +66,17 @@ object EntityManager : GlobalManager {
         @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
         fun PlayerJumpEvent.jump() {
             player.forEachTracker { it.animate(TrackerExtraAnimation.JUMP) }
+        }
+        @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+        fun EntityCollideWithEntityEvent.collide() { //Inject a physics impulse on cube mob collision
+            val cube = entities.filterIsInstance<AbstractCubeMob>().firstOrNull() ?: return
+            val other = entities.first { it !== cube }
+            val velocity = cube.velocity
+            if (velocity.lengthSquared() < 1.0E-4) return
+            val victim = (other as? HitBox)?.source()?.uuid() ?: other.uniqueId
+            val impulse = Vector3f(velocity.x.toFloat(), velocity.y.toFloat(), velocity.z.toFloat())
+                .mul(cube.size * CUBE_IMPULSE_COEFFICIENT)
+            BetterModel.registryOrNull(victim)?.trackers()?.forEach { it.applyImpulse(impulse) }
         }
     }
 

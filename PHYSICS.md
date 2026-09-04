@@ -48,6 +48,9 @@ The simulation runs at Minecraft tick cadence (50 ms) on the tracker worker thre
 - **Impulse** — plugins can inject a velocity kick into every physics bone via
   `Tracker.applyImpulse(Vector3f)` / `RenderPipeline.impulse(Vector3f)`.
   Bones swing in the impulse direction and recover by their own stiffness/damping.
+  On Paper, collisions with cube-family mobs (`AbstractCubeMob`, e.g. the Sulfur Cube)
+  automatically inject `cube velocity x 0.2 x size` into the collided model's
+  physics bones through the same path.
 
 Models without a `physics` section pay no physics cost (the engine is never created).
 
