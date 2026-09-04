@@ -17,6 +17,7 @@ import kr.toxicity.model.api.nms.AnimationBundler;
 import kr.toxicity.model.api.nms.HitBox;
 import kr.toxicity.model.api.nms.PacketBundler;
 import kr.toxicity.model.api.nms.PlayerChannelHandler;
+import kr.toxicity.model.api.physics.PhysicsEngine;
 import kr.toxicity.model.api.platform.PlatformPlayer;
 import kr.toxicity.model.api.tracker.ModelRotation;
 import kr.toxicity.model.api.util.FunctionUtil;
@@ -78,6 +79,12 @@ public final class RenderPipeline implements BoneEventHandler, Iterable<Rendered
     private final BoneEventDispatcher eventDispatcher = new BoneEventDispatcher();
     private final BoneIKSolver ikSolver;
 
+    /**
+     * The physics engine of this pipeline, or null if no bone of the base model
+     * (and no attached equipment) uses physics.
+     */
+    private PhysicsEngine physicsEngine;
+
     private Predicate<PlatformPlayer> viewFilter = _ -> true;
     private Predicate<PlatformPlayer> hideFilter = p -> hidePlayerSet.contains(p.uuid());
 
@@ -115,6 +122,9 @@ public final class RenderPipeline implements BoneEventHandler, Iterable<Rendered
             .peek(bone -> bone.locator(ikSolver))
             .filter(rb -> rb.getDisplay() != null)
             .count();
+        var engine = new PhysicsEngine(source, bones);
+        for (var bone : flattenBones) engine.register(bone);
+        physicsEngine = engine.isEmpty() ? null : engine;
     }
 
     /**
@@ -286,11 +296,31 @@ public final class RenderPipeline implements BoneEventHandler, Iterable<Rendered
      */
     public boolean tick(@NotNull AnimationBundler bundler) {
         var match = matchTree(RenderedBone::tick);
+        var engine = physicsEngine;
+        if (engine != null) match |= engine.step();
         if (match) {
             ikSolver.solve();
             forEach(b -> b.sendTransformation(null, bundler));
         }
         return match;
+    }
+
+    /**
+     * Applies an impulse to every physics bone of this pipeline.
+     * <p>
+     * The impulse is added to the spring velocity directly: bones swing in the impulse
+     * direction and recover by their own stiffness/damping. This is the generic entry point
+     * for external impacts such as entity collisions or knockback.
+     * </p>
+     *
+     * @param impulse the velocity delta in blocks per tick
+     * @throws NullPointerException if impulse is null
+     * @since 3.4.2
+     */
+    public void impulse(@NotNull Vector3f impulse) {
+        Objects.requireNonNull(impulse);
+        var engine = physicsEngine;
+        if (engine != null) engine.impulse(impulse);
     }
 
     /**
@@ -344,6 +374,10 @@ public final class RenderPipeline implements BoneEventHandler, Iterable<Rendered
             root.flatten().forEach(bone -> {
                 bone.extend(this);
                 dynamicBones.add(bone);
+                if (bone.getGroup().getPhysics() != null) {
+                    if (physicsEngine == null) physicsEngine = new PhysicsEngine(source, bones);
+                    physicsEngine.register(bone);
+                }
             });
             anchor.attach(root);
         }
@@ -385,7 +419,10 @@ public final class RenderPipeline implements BoneEventHandler, Iterable<Rendered
                     if (bundler.isNotEmpty()) bundler.send(spawned.handler.player());
                 });
             }
-            subtree.forEach(dynamicBones::remove);
+            subtree.forEach(bone -> {
+                dynamicBones.remove(bone);
+                if (physicsEngine != null) physicsEngine.unregister(bone);
+            });
             anchor.detach(root);
         }
         return true;

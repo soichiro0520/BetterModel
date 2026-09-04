@@ -13,6 +13,7 @@ import kr.toxicity.model.api.data.blueprint.BlueprintElement;
 import kr.toxicity.model.api.data.blueprint.ModelBoundingBox;
 import kr.toxicity.model.api.mount.MountController;
 import kr.toxicity.model.api.mount.MountControllers;
+import kr.toxicity.model.api.physics.PhysicsParameters;
 import kr.toxicity.model.api.platform.PlatformItemStack;
 import kr.toxicity.model.api.util.MathUtil;
 import kr.toxicity.model.api.util.TransformedItemStack;
@@ -54,6 +55,9 @@ public final class RendererGroup {
     @Getter
     private final @NotNull MountController mountController;
 
+    @Getter
+    private final @Nullable PhysicsParameters physics;
+
     /**
      * Creates group instance.
      * @param scale scale
@@ -61,13 +65,15 @@ public final class RendererGroup {
      * @param group parent
      * @param children children
      * @param box hit-box
+     * @param physics physics parameters, or null if this bone is not physics-enabled
      */
     public RendererGroup(
         float scale,
         @Nullable PlatformItemStack itemStack,
         @NotNull BlueprintElement.Bone group,
         @NotNull SequencedMap<BoneName, RendererGroup> children,
-        @Nullable ModelBoundingBox box
+        @Nullable ModelBoundingBox box,
+        @Nullable PhysicsParameters physics
     ) {
         this.parent = group;
         this.children = children;
@@ -82,6 +88,7 @@ public final class RendererGroup {
         this.hitBox = box;
         this.hitBoxPoint = box == null ? new Vector3f() : box.centerPoint();
         this.rotation = group.rotation().toVector();
+        this.physics = physics;
         if (name().tagged(BoneTags.SEAT)) {
             mountController = BetterModel.config().defaultMountController();
         } else if (name().tagged(BoneTags.SUB_SEAT)) {

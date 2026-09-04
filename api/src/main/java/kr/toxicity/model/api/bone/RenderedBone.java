@@ -118,6 +118,10 @@ public final class RenderedBone implements BoneEventHandler {
     private final Map<UUID, BoneStateHandler> perPlayerState = new ConcurrentHashMap<>();
     private volatile ModelRotation rotation = ModelRotation.EMPTY;
 
+    //Physics
+    private final Vector3f jiggleOffset = new Vector3f();
+    private volatile float squash;
+
     private Supplier<Vector3f> defaultPosition = FunctionUtil.asSupplier(EMPTY_VECTOR);
     private FloatSupplier scale = FloatConstantSupplier.ONE;
 
@@ -358,6 +362,50 @@ public final class RenderedBone implements BoneEventHandler {
     public boolean tick(@NotNull UUID uuid) {
         var get = perPlayerState.get(uuid);
         return get != null && get.tick();
+    }
+
+    /**
+     * Writes the jiggle offset applied on top of the final transform at packet time.
+     * <p>
+     * This offset never propagates to children structurally; use the {@code chain}
+     * parameter of {@link kr.toxicity.model.api.physics.PhysicsParameters} instead.
+     * It also never affects hitbox positions.
+     * </p>
+     *
+     * @param x the x offset in blocks
+     * @param y the y offset in blocks
+     * @param z the z offset in blocks
+     * @since 3.4.2
+     */
+    @ApiStatus.Internal
+    public void jiggleOffset(float x, float y, float z) {
+        jiggleOffset.set(x, y, z);
+    }
+
+    /**
+     * Writes the volume-preserving squash value of this bone.
+     * <p>
+     * The final scale is {@code (1/√(1-s), 1-s, 1/√(1-s))}. Only meaningful for root bones;
+     * children inherit it through normal parent transform propagation.
+     * </p>
+     *
+     * @param squash the squash strength
+     * @since 3.4.2
+     */
+    @ApiStatus.Internal
+    public void squash(float squash) {
+        this.squash = squash;
+    }
+
+    /**
+     * Marks this bone's movement as changed by the physics layer so the next
+     * transformation evaluation and packet send include it.
+     *
+     * @since 3.4.2
+     */
+    @ApiStatus.Internal
+    public void physicsMoved() {
+        globalState.physicsMoved();
     }
 
     public void dirtyUpdate(@NotNull PacketBundler bundler) {
@@ -674,6 +722,12 @@ public final class RenderedBone implements BoneEventHandler {
                     .mul(def.rotation())
                     .mul(modifiedLocalRot(preventModifierUpdate)));
             }
+            var squashValue = squash;
+            if (squashValue != 0F) {
+                var scaleY = 1F - squashValue;
+                var scaleXZ = 1F / (float) Math.sqrt(scaleY);
+                def.scale().mul(scaleXZ, scaleY, scaleXZ);
+            }
             return def;
         }
 
@@ -690,6 +744,13 @@ public final class RenderedBone implements BoneEventHandler {
             }
             firstTick = false;
             return result;
+        }
+
+        private void physicsMoved() {
+            if (updateAfter.compareAndSet(false, true)) {
+                lock.accessToWriteLock(() -> before.set(current));
+                updateCurrent.set(true);
+            }
         }
 
         private float progress() {
@@ -716,7 +777,8 @@ public final class RenderedBone implements BoneEventHandler {
                         .add(root.group.getPosition()),
                     mul,
                     itemStack.position()
-                ).add(defaultPosition.get()),
+                ).add(defaultPosition.get())
+                    .add(jiggleOffset),
                 movement.scale()
                     .mul(itemStack.scale(), scaleCache)
                     .mul(mul)

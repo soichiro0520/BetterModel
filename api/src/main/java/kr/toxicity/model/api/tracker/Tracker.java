@@ -34,6 +34,7 @@ import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.annotations.Unmodifiable;
+import org.joml.Vector3f;
 
 import java.util.*;
 import java.util.concurrent.*;
@@ -379,6 +380,27 @@ public abstract class Tracker implements AutoCloseable {
      */
     public boolean unequip(@NotNull String anchorName) {
         return pipeline.detach(anchorName);
+    }
+
+    /**
+     * Applies an impulse to every physics bone of this tracker's model.
+     * <p>
+     * This is the generic entry point for external impacts (entity collisions, knockback,
+     * projectiles). Bones swing in the impulse direction and recover by their own
+     * stiffness/damping. Models without physics bones are unaffected.
+     * </p>
+     *
+     * <p>Example usage:</p>
+     * <pre>{@code
+     * tracker.applyImpulse(new Vector3f(0.5F, 0.2F, 0F));
+     * }</pre>
+     *
+     * @param impulse the velocity delta in blocks per tick
+     * @throws NullPointerException if impulse is null
+     * @since 3.4.2
+     */
+    public void applyImpulse(@NotNull Vector3f impulse) {
+        pipeline.impulse(impulse);
     }
 
     /**

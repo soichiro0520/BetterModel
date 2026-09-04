@@ -21,7 +21,9 @@ import kr.toxicity.model.api.event.ModelImportedEvent
 import kr.toxicity.model.api.manager.ModelManager
 import kr.toxicity.model.api.pack.PackBuilder
 import kr.toxicity.model.api.pack.PackZipper
+import kr.toxicity.model.api.physics.PhysicsParameters
 import kr.toxicity.model.api.platform.PlatformNamespace
+import kr.toxicity.model.api.util.PackUtil
 import kr.toxicity.model.util.*
 import net.kyori.adventure.text.format.NamedTextColor.*
 import java.io.File
@@ -41,6 +43,11 @@ object ModelManagerImpl : ModelManager, GlobalManager {
         pipeline: ReloadPipeline,
         dir: File
     ): Sequence<ImportedModel> {
+        val physicsFileMap = dir.fileTrees().use { stream ->
+            stream.filter { it.extension.lowercase() in setOf("yaml", "yml") }
+                .map { PackUtil.toPackName(it.fileName.toString().substringBeforeLast('.')) to ModelPhysicsParser.parse(it.toFile()) }
+                .toList()
+        }.toMap()
         val targetAssets = ModelAssetsEvent(type, dir.fileTrees().use { stream ->
             stream.filter { it.extension.lowercase() in modelExtensions }
                 .map(ModelAsset::of)
@@ -84,7 +91,8 @@ object ModelManagerImpl : ModelManager, GlobalManager {
                 ImportedModel(
                     it.first.sizeAssume - it.second.textures.sumOf { tex -> tex.image.size },
                     type,
-                    it.second
+                    it.second,
+                    physicsFileMap[it.second.name] ?: emptyMap()
                 )
             }
     }
@@ -117,7 +125,8 @@ object ModelManagerImpl : ModelManager, GlobalManager {
     private data class ImportedModel(
         val jsonSize: Long,
         val type: ModelRenderer.Type,
-        val blueprint: ModelBlueprint
+        val blueprint: ModelBlueprint,
+        val physics: Map<String, PhysicsParameters>
     )
 
     private class ModelPipeline(
@@ -156,9 +165,9 @@ object ModelManagerImpl : ModelManager, GlobalManager {
             targetMap: MutableMap<String, ModelRenderer>,
             importedModel: ImportedModel
         ) {
-            val (size, type, blueprint) = importedModel
+            val (size, type, blueprint, physics) = importedModel
             val context = blueprint.context()
-            targetMap[blueprint.name] = blueprint.toRenderer(type) render@ { group ->
+            targetMap[blueprint.name] = blueprint.toRenderer(type, physics) render@ { group ->
                 if (!context.canBeRendered()) return@render null
                 modernModel.ifAvailable {
                     val json = group.buildModernJson(obfuscator, context)
@@ -227,12 +236,15 @@ object ModelManagerImpl : ModelManager, GlobalManager {
             )
         )
 
-        private fun ModelBlueprint.toRenderer(type: ModelRenderer.Type, builder: (BlueprintElement.Group) -> String?): ModelRenderer {
+        private fun ModelBlueprint.toRenderer(type: ModelRenderer.Type, physics: Map<String, PhysicsParameters>, builder: (BlueprintElement.Group) -> String?): ModelRenderer {
+            fun physicsOf(rawName: String): PhysicsParameters? {
+                return physics[rawName] ?: if (rawName.startsWith(PhysicsParameters.JIGGLE_PREFIX)) PhysicsParameters.DEFAULT else null
+            }
             fun <T> Collection<BlueprintElement>.toBoneMap(mapper: (BlueprintElement.Bone) -> T) = filterIsInstance<BlueprintElement.Bone>().let { bone ->
                 bone.associateTo(sequencedAddressingMapOf(bone.size)) { it.name() to mapper(it) }
             }.toImmutableView()
             fun BlueprintElement.Bone.parse(): RendererGroup {
-                if (this !is BlueprintElement.Group) return RendererGroup(1.0F, null, this, emptySequencedMap(), null)
+                if (this !is BlueprintElement.Group) return RendererGroup(1.0F, null, this, emptySequencedMap(), null, null)
                 return RendererGroup(
                     scale(),
                     if (name.toItemMapper() !== BoneItemMapper.EMPTY) null else builder(this)?.let { itemNamespace ->
@@ -241,6 +253,7 @@ object ModelManagerImpl : ModelManager, GlobalManager {
                     this,
                     children.toBoneMap { it.parse() },
                     hitBox(),
+                    physicsOf(name.rawName)
                 )
             }
             return ModelRenderer(
