@@ -667,6 +667,8 @@ public final class RenderedBone implements BoneEventHandler {
 
     final class BoneStateHandler {
 
+        private static final float POSITION_COMPARISON_EPSILON_SQ = 1.0E-6F;
+
         private final @Nullable UUID uuid;
         private final Consumer<UUID> consumer;
 
@@ -684,6 +686,8 @@ public final class RenderedBone implements BoneEventHandler {
         //Caches
         private final Vector3f positionCache = new Vector3f(), scaleCache = new Vector3f();
         private final Quaternionf localRotCache = new Quaternionf(), globalRotCache = new Quaternionf();
+        private final Vector3f sentPosition = new Vector3f(), sentScale = new Vector3f(1);
+        private final Quaternionf sentRotation = new Quaternionf();
 
         //Lock
         private final DuplexLock lock = new DuplexLock();
@@ -763,27 +767,51 @@ public final class RenderedBone implements BoneEventHandler {
             return Math.round(frame + MathUtil.FLOAT_COMPARISON_EPSILON);
         }
 
+        private boolean isSimilarToSent(@NotNull BoneMovement movement) {
+            var px = movement.position().x + jiggleOffset.x - sentPosition.x;
+            var py = movement.position().y + jiggleOffset.y - sentPosition.y;
+            var pz = movement.position().z + jiggleOffset.z - sentPosition.z;
+            var similar = px * px + py * py + pz * pz < POSITION_COMPARISON_EPSILON_SQ
+                && MathUtil.isSimilar(movement.scale(), sentScale)
+                && MathUtil.isSimilar(movement.rotation(), sentRotation);
+            if (!similar) {
+                sentPosition.set(movement.position()).add(jiggleOffset);
+                sentScale.set(movement.scale());
+                sentRotation.set(movement.rotation());
+            }
+            return similar;
+        }
+
         private void sendTransformation(@NotNull AnimationBundler bundler) {
             if (!updateCurrent.compareAndSet(true, false)) return;
             var after = after();
-            var movement = lock.accessToWriteLock(() -> current.set(after));
-            if (transformer == null) return;
+            if (transformer == null) {
+                lock.accessToWriteLock(() -> current.set(after));
+                return;
+            }
+            if (lock.accessToWriteLock(() -> {
+                var similar = isSimilarToSent(after);
+                current.set(after);
+                return similar;
+            })) return;
             var mul = scale.getAsFloat();
+            var duration = interpolationDuration();
+            if (duration > 0 && duration < 2 && (!MathUtil.isZero(jiggleOffset) || squash != 0F)) duration = 2;
             transformer.transform(
-                interpolationDuration(),
+                duration,
                 MathUtil.fma(
-                    itemStack.offset().rotate(movement.rotation(), positionCache)
-                        .add(movement.position())
+                    itemStack.offset().rotate(current.rotation(), positionCache)
+                        .add(current.position())
                         .add(root.group.getPosition()),
                     mul,
                     itemStack.position()
                 ).add(defaultPosition.get())
                     .add(jiggleOffset),
-                movement.scale()
+                current.scale()
                     .mul(itemStack.scale(), scaleCache)
                     .mul(mul)
                     .max(EMPTY_VECTOR),
-                movement.rotation(),
+                current.rotation(),
                 bundler
             );
         }

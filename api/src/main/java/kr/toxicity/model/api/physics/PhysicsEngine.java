@@ -40,6 +40,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class PhysicsEngine {
 
     private static final int STEP_INTERVAL = Tracker.MINECRAFT_TICK_MULTIPLIER;
+    private static final int SEND_INTERVAL = 2;
     private static final float GRAVITY_ACCELERATION = 0.08F;
     private static final float MAX_OFFSET = 4F;
     private static final float MAX_VELOCITY = 4F;
@@ -57,6 +58,7 @@ public final class PhysicsEngine {
     private final Map<RenderedBone, BoneState> states = new ConcurrentHashMap<>();
 
     private long tick;
+    private long sendTick;
     private boolean sampled;
     private double lastX, lastY, lastZ;
     private float velocityX, velocityY, velocityZ;
@@ -139,6 +141,9 @@ public final class PhysicsEngine {
      * Advances the simulation by one tracker tick and writes the deformation to the bones.
      * <p>
      * Actual integration happens at Minecraft tick cadence; other calls only return false.
+     * Packet refreshes are throttled to one per {@code SEND_INTERVAL} simulation steps;
+     * the simulation itself still runs every step. Settling to the rest pose always
+     * schedules a final refresh so the client never keeps a stale deformation.
      * </p>
      *
      * @return true if any bone was deformed and needs a packet refresh
@@ -146,6 +151,7 @@ public final class PhysicsEngine {
      */
     public boolean step() {
         if (++tick % STEP_INTERVAL != 0) return false;
+        var send = ++sendTick % SEND_INTERVAL == 0;
         var location = source.location();
         if (sampled) {
             var vx = (float) (location.x() - lastX);
@@ -169,24 +175,29 @@ public final class PhysicsEngine {
 
         var moved = false;
         for (var entry : states.entrySet()) {
-            if (integrate(entry.getKey(), entry.getValue())) moved = true;
+            if (integrate(entry.getKey(), entry.getValue(), send)) moved = true;
         }
         if (squashActive) {
             squashVelocity += -SQUASH_STIFFNESS * squash - SQUASH_DAMPING * squashVelocity;
             squash = Math.clamp(squash + squashVelocity, MIN_SQUASH, MAX_SQUASH);
+            root.squash(squash);
             if (Math.abs(squash) < EPSILON && Math.abs(squashVelocity) < EPSILON) {
+                // Settled: always sync the restored scale, even off-interval.
                 squash = 0F;
                 squashVelocity = 0F;
                 squashActive = false;
+                root.squash(0F);
+                root.physicsMoved();
+                moved = true;
+            } else if (send) {
+                root.physicsMoved();
+                moved = true;
             }
-            root.squash(squash);
-            root.physicsMoved();
-            moved = true;
         }
         return moved;
     }
 
-    private boolean integrate(@NotNull RenderedBone bone, @NotNull BoneState state) {
+    private boolean integrate(@NotNull RenderedBone bone, @NotNull BoneState state, boolean send) {
         var parameters = state.parameters;
         state.vx += -parameters.stiffness() * state.ox - parameters.damping() * state.vx - parameters.inertia() * accelerationX;
         state.vy += -parameters.stiffness() * state.oy - parameters.damping() * state.vy - parameters.inertia() * accelerationY - GRAVITY_ACCELERATION * parameters.gravity();
@@ -202,10 +213,15 @@ public final class PhysicsEngine {
             || Math.abs(state.vx) > EPSILON || Math.abs(state.vy) > EPSILON || Math.abs(state.vz) > EPSILON;
         if (!state.active && !significant) return false;
         if (!significant) {
+            // Settled: always sync the restored offset, even off-interval.
             state.ox = state.oy = state.oz = 0F;
             state.vx = state.vy = state.vz = 0F;
             state.active = false;
-        } else state.active = true;
+            bone.jiggleOffset(0F, 0F, 0F);
+            bone.physicsMoved();
+            return true;
+        }
+        state.active = true;
 
         var offset = state.offset.set(state.ox, state.oy, state.oz);
         if (parameters.chain()) {
@@ -219,6 +235,7 @@ public final class PhysicsEngine {
             }
         }
         bone.jiggleOffset(offset.x, offset.y, offset.z);
+        if (!send) return false;
         bone.physicsMoved();
         return true;
     }
